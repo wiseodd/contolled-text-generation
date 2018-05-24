@@ -291,7 +291,7 @@ class RNN_VAE(nn.Module):
             y = self.decoder_fc(output).view(-1)
             y = F.softmax(y/temp, dim=0)
 
-            idx = torch.multinomial(y)
+            idx = torch.multinomial(y, 1)
 
             word = Variable(torch.LongTensor([int(idx)]))
             word = word.cuda() if self.gpu else word

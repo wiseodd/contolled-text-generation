@@ -66,7 +66,7 @@ def main():
             kld_weight += kld_inc
 
         loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm(model.vae_params, 5)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.vae_params, 5)
         trainer.step()
         trainer.zero_grad()
 
