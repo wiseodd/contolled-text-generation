@@ -28,7 +28,7 @@ class RNN_VAE(nn.Module):
         self.c_dim = c_dim
         self.p_word_dropout = p_word_dropout
         self.num_layers = 1
-        self.num_experts = 5
+        self.num_experts = 1
 
         self.gpu = gpu
 
@@ -46,6 +46,7 @@ class RNN_VAE(nn.Module):
             self.word_emb.weight.data.copy_(pretrained_embeddings)
 
             if freeze_embeddings:
+                print('freeze embeddings!')
                 self.word_emb.weight.requires_grad = False
 
         """
@@ -94,7 +95,7 @@ class RNN_VAE(nn.Module):
         )
 
         self.vae_params = chain(
-            self.word_emb.parameters(), self.encoder_params, self.decoder_params
+            self.encoder_params, self.decoder_params, self.word_emb.parameters(),
         )
         self.vae_params = filter(lambda p: p.requires_grad, self.vae_params)
 
@@ -177,7 +178,7 @@ class RNN_VAE(nn.Module):
 
         # return outputs => word
         # mixture = self.emb_fc[0](outputs)
-        emb_out = [fc(outputs) for fc in self.emb_fc]
+        emb_out = [F.tanh(fc(outputs)) for fc in self.emb_fc]
         coef_out = F.softmax(self.coef_fc(outputs), 1)
         mixture = sum([single_expert * coef_out[:,k].unsqueeze(1) 
                        for k, single_expert in enumerate(emb_out)])
@@ -258,8 +259,9 @@ class RNN_VAE(nn.Module):
         # )
         emb_loss = F.cosine_embedding_loss(
             emb_out.view(-1, self.emb_dim), 
-            emb_target.view(-1, self.emb_dim), 
-            Variable(torch.ones(mbsize * seq_len)).cuda(), size_average=True
+            emb_target.view(-1, self.emb_dim),
+            Variable(torch.ones(mbsize * seq_len)).cuda(), 
+            margin=0.5, size_average=True
         )
         # recon_loss = F.cross_entropy(
         #     y.view(-1, self.n_vocab), dec_targets.view(-1), size_average=True
@@ -318,11 +320,19 @@ class RNN_VAE(nn.Module):
             # y = self.decoder_fc(output).view(-1)
 
             # New embed
-            emb = self.emb_fc[0](output).view(-1).unsqueeze(0)
+            output = output.squeeze(0)
+            # emb = self.emb_fc[0](output)
+            emb_out = [F.tanh(fc(output)) for fc in self.emb_fc]
+            coef_out = F.softmax(self.coef_fc(output), 1)
+            
+            emb = sum([single_expert * coef_out[:,k].unsqueeze(1) 
+                       for k, single_expert in enumerate(emb_out)])
+
             # idx = torch.sum(F.mse_loss(emb, self.word_emb.weight, reduce=False), dim=1)
             idx = F.cosine_similarity(emb.view(-1, self.emb_dim), self.word_emb.weight)
             idx = torch.argmin(idx)
             emb = emb.unsqueeze(0)
+
 
             # y = F.softmax(y/temp, dim=0)
             # idx = torch.multinomial(y, 1)

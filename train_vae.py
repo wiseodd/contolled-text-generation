@@ -41,7 +41,7 @@ dataset = SST_Dataset()
 
 model = RNN_VAE(
     dataset.n_vocab, h_dim, z_dim, c_dim, p_word_dropout=0.3,
-    pretrained_embeddings=dataset.get_vocab_vectors(), freeze_embeddings=False,
+    pretrained_embeddings=dataset.get_vocab_vectors(), freeze_embeddings=True,
     gpu=args.gpu
 )
 
