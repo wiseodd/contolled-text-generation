@@ -27,7 +27,7 @@ class RNN_VAE(nn.Module):
         self.z_dim = z_dim
         self.c_dim = c_dim
         self.p_word_dropout = p_word_dropout
-        self.num_layers = 2
+        self.num_layers = 5
 
         self.gpu = gpu
 
@@ -57,10 +57,10 @@ class RNN_VAE(nn.Module):
         """
         Decoder is GRU with `z` and `c` appended at its inputs
         """
-        self.decoder = nn.GRU(self.emb_dim+z_dim+c_dim, z_dim+c_dim, 
+        self.decoder = nn.GRU(self.emb_dim+z_dim+c_dim, self.h_dim, 
                               num_layers=self.num_layers, dropout=0.3)
-        self.decoder_fc = nn.Linear(z_dim+c_dim, n_vocab)
-        self.emb_fc = nn.Linear(z_dim+c_dim, self.emb_dim)
+        # self.decoder_fc = nn.Linear(z_dim+c_dim, n_vocab)
+        self.emb_fc = nn.Linear(self.h_dim, self.emb_dim)
 
         """
         Discriminator is CNN as in Kim, 2014
@@ -87,7 +87,7 @@ class RNN_VAE(nn.Module):
         )
 
         self.decoder_params = chain(
-            self.decoder.parameters(), self.decoder_fc.parameters(), 
+            self.decoder.parameters(), # self.decoder_fc.parameters(), 
             self.emb_fc.parameters()
         )
 
@@ -158,12 +158,14 @@ class RNN_VAE(nn.Module):
 
         # Forward
         seq_len = dec_inputs.size(0)
+        mbsize = dec_inputs.size(1)
 
         # 1 x mbsize x (z_dim+c_dim)
-        init_h = torch.cat([z.unsqueeze(0), c.unsqueeze(0)], dim=2)
+        init_h = torch.zeros(self.num_layers, mbsize, self.h_dim)
+        init_zc = torch.cat([z.unsqueeze(0), c.unsqueeze(0)], dim=2)
         inputs_emb = self.word_emb(dec_inputs)  # seq_len x mbsize x emb_dim
-        inputs_emb = torch.cat([inputs_emb, init_h.repeat(seq_len, 1, 1)], 2)
-        init_h = init_h.repeat(self.num_layers, 1, 1)
+        inputs_emb = torch.cat([inputs_emb, init_zc.repeat(seq_len, 1, 1)], 2)
+
 
         outputs, _ = self.decoder(inputs_emb, init_h)
         seq_len, mbsize, _ = outputs.size()

@@ -45,6 +45,28 @@ model = RNN_VAE(
     gpu=args.gpu
 )
 
+def model_params(_model):
+    print('model parameters: ', end='')
+    params = list()
+    total_size = 0
+
+    def multiply_iter(p_list):
+        out = 1
+        for _p in p_list:
+            out *= _p
+        return out
+
+    for p in _model.parameters():
+        if p.requires_grad:
+            params.append(p)
+            total_size += multiply_iter(p.size())
+    print('%s' % '{:,}'.format(total_size))
+    return params
+
+
+print(model)
+model_params(model)
+
 
 def main():
     # Annealing for KL term
