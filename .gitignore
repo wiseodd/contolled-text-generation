@@ -109,6 +109,7 @@ ENV/
 *.snm
 *.synctex.gz
 *.toc
+*.swp
 
 /models
 .vscode

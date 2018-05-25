@@ -109,8 +109,8 @@ def main():
         x_gen_attr, target_z, target_c = model.generate_soft_embed(batch_size, temp=temp(it))
 
         # y_z: mbsize x z_dim
-        y_z, _ = model.forward_encoder_embed(x_gen_attr.transpose(0, 1))
-        y_c = model.forward_discriminator_embed(x_gen_attr)
+        y_z, _ = model.forward_encoder_embed(x_gen_attr.detach().transpose(0, 1))
+        y_c = model.forward_discriminator_embed(x_gen_attr.detach())
 
         loss_vae = recon_loss + kl_weight_max * kl_loss
         loss_attr_c = F.cross_entropy(y_c, target_c)

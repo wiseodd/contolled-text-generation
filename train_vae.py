@@ -29,10 +29,10 @@ args = parser.parse_args()
 
 mb_size = 32
 z_dim = 20
-h_dim = 64
+h_dim = 32
 lr = 1e-3
 lr_decay_every = 1000000
-n_iter = 20000
+n_iter = 100000
 log_interval = 1000
 z_dim = h_dim
 c_dim = 2
@@ -41,9 +41,31 @@ dataset = SST_Dataset()
 
 model = RNN_VAE(
     dataset.n_vocab, h_dim, z_dim, c_dim, p_word_dropout=0.3,
-    pretrained_embeddings=dataset.get_vocab_vectors(), freeze_embeddings=False,
+    pretrained_embeddings=dataset.get_vocab_vectors(), freeze_embeddings=True,
     gpu=args.gpu
 )
+
+def model_params(_model):
+    print('model parameters: ', end='')
+    params = list()
+    total_size = 0
+
+    def multiply_iter(p_list):
+        out = 1
+        for _p in p_list:
+            out *= _p
+        return out
+
+    for p in _model.parameters():
+        if p.requires_grad:
+            params.append(p)
+            total_size += multiply_iter(p.size())
+    print('%s' % '{:,}'.format(total_size))
+    return params
+
+
+print(model)
+model_params(model)
 
 
 def main():
@@ -58,7 +80,7 @@ def main():
     for it in range(n_iter):
         inputs, labels = dataset.next_batch(args.gpu)
 
-        recon_loss, kl_loss = model.forward(inputs)
+        recon_loss, kl_loss, emb_loss = model.forward(inputs)
         loss = recon_loss + kld_weight * kl_loss
 
         # Anneal kl_weight
@@ -66,7 +88,7 @@ def main():
             kld_weight += kld_inc
 
         loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm(model.vae_params, 5)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.vae_params, 5)
         trainer.step()
         trainer.zero_grad()
 
@@ -77,8 +99,9 @@ def main():
             sample_idxs = model.sample_sentence(z, c)
             sample_sent = dataset.idxs2sentence(sample_idxs)
 
-            print('Iter-{}; Loss: {:.4f}; Recon: {:.4f}; KL: {:.4f}; Grad_norm: {:.4f};'
-                  .format(it, loss.data[0], recon_loss.data[0], kl_loss.data[0], grad_norm))
+            print('Iter-{}; Loss: {:.4f}; Recon: {:.4f}|{:.4f}; KL: {:.4f}; Grad_norm: {:.4f};'
+                  .format(it, loss.data[0], recon_loss.data[0], kld_weight,
+                          kl_loss.data[0], grad_norm))
 
             print('Sample: "{}"'.format(sample_sent))
             print()

@@ -1,5 +1,6 @@
 from torchtext import data, datasets
 from torchtext.vocab import GloVe
+import os
 
 
 class SST_Dataset:
@@ -16,7 +17,9 @@ class SST_Dataset:
             filter_pred=f
         )
 
-        self.TEXT.build_vocab(train, vectors=GloVe('6B', dim=emb_dim))
+        glove_path = os.path.join(os.path.expanduser("~"), 'datasets/glove')
+        self.TEXT.build_vocab(train, vectors=GloVe('6B', dim=emb_dim, 
+						   cache=glove_path))
         self.LABEL.build_vocab(train)
 
         self.n_vocab = len(self.TEXT.vocab.itos)

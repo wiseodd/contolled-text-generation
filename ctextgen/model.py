@@ -27,6 +27,8 @@ class RNN_VAE(nn.Module):
         self.z_dim = z_dim
         self.c_dim = c_dim
         self.p_word_dropout = p_word_dropout
+        self.num_layers = 1
+        self.num_experts = 1
 
         self.gpu = gpu
 
@@ -44,6 +46,7 @@ class RNN_VAE(nn.Module):
             self.word_emb.weight.data.copy_(pretrained_embeddings)
 
             if freeze_embeddings:
+                print('freeze embeddings!')
                 self.word_emb.weight.requires_grad = False
 
         """
@@ -56,8 +59,11 @@ class RNN_VAE(nn.Module):
         """
         Decoder is GRU with `z` and `c` appended at its inputs
         """
-        self.decoder = nn.GRU(self.emb_dim+z_dim+c_dim, z_dim+c_dim, dropout=0.3)
-        self.decoder_fc = nn.Linear(z_dim+c_dim, n_vocab)
+        self.decoder = nn.GRU(self.emb_dim+z_dim+c_dim, z_dim+c_dim, 
+                              num_layers=self.num_layers, dropout=0.3)
+        # self.decoder_fc = nn.Linear(z_dim+c_dim, n_vocab)
+        self.emb_fc = nn.ModuleList([nn.Linear(z_dim+c_dim, self.emb_dim)]*self.num_experts)
+        self.coef_fc = nn.Linear(z_dim+c_dim, self.num_experts)
 
         """
         Discriminator is CNN as in Kim, 2014
@@ -84,11 +90,12 @@ class RNN_VAE(nn.Module):
         )
 
         self.decoder_params = chain(
-            self.decoder.parameters(), self.decoder_fc.parameters()
+            self.decoder.parameters(), # self.decoder_fc.parameters(), 
+            self.emb_fc.parameters()
         )
 
         self.vae_params = chain(
-            self.word_emb.parameters(), self.encoder_params, self.decoder_params
+            self.encoder_params, self.decoder_params, self.word_emb.parameters(),
         )
         self.vae_params = filter(lambda p: p.requires_grad, self.vae_params)
 
@@ -154,8 +161,10 @@ class RNN_VAE(nn.Module):
 
         # Forward
         seq_len = dec_inputs.size(0)
+        mbsize = dec_inputs.size(1)
 
         # 1 x mbsize x (z_dim+c_dim)
+        # init_h = Variable(torch.zeros(self.num_layers, mbsize, self.h_dim)).cuda()
         init_h = torch.cat([z.unsqueeze(0), c.unsqueeze(0)], dim=2)
         inputs_emb = self.word_emb(dec_inputs)  # seq_len x mbsize x emb_dim
         inputs_emb = torch.cat([inputs_emb, init_h.repeat(seq_len, 1, 1)], 2)
@@ -164,10 +173,17 @@ class RNN_VAE(nn.Module):
         seq_len, mbsize, _ = outputs.size()
 
         outputs = outputs.view(seq_len*mbsize, -1)
-        y = self.decoder_fc(outputs)
-        y = y.view(seq_len, mbsize, self.n_vocab)
+        # y = self.decoder_fc(outputs)
+        # y = y.view(seq_len, mbsize, self.n_vocab)
 
-        return y
+        # return outputs => word
+        # mixture = self.emb_fc[0](outputs)
+        emb_out = [F.tanh(fc(outputs)) for fc in self.emb_fc]
+        coef_out = F.softmax(self.coef_fc(outputs), 1)
+        mixture = sum([single_expert * coef_out[:,k].unsqueeze(1) 
+                       for k, single_expert in enumerate(emb_out)])
+
+        return _, mixture
 
     def forward_discriminator(self, inputs):
         """
@@ -211,7 +227,7 @@ class RNN_VAE(nn.Module):
         """
         self.train()
 
-        mbsize = sentence.size(1)
+        seq_len, mbsize = sentence.size()
 
         # sentence: '<start> I want to fly <eos>'
         # enc_inputs: '<start> I want to fly <eos>'
@@ -234,14 +250,26 @@ class RNN_VAE(nn.Module):
             c = self.forward_discriminator(sentence.transpose(0, 1))
 
         # Decoder: sentence -> y
-        y = self.forward_decoder(dec_inputs, z, c)
+        y, emb_out = self.forward_decoder(dec_inputs, z, c)
+        emb_target = Variable(self.word_emb(dec_targets)).cuda()
 
-        recon_loss = F.cross_entropy(
-            y.view(-1, self.n_vocab), dec_targets.view(-1), size_average=True
+        # emb_loss = F.mse_loss(
+        #     emb_out.view(-1, self.emb_dim), 
+        #     emb_target.view(-1, self.emb_dim), size_average=True
+        # )
+        emb_loss = F.cosine_embedding_loss(
+            emb_out.view(-1, self.emb_dim), 
+            emb_target.view(-1, self.emb_dim),
+            Variable(torch.ones(mbsize * seq_len)).cuda(), 
+            margin=0.5, size_average=True
         )
+        # recon_loss = F.cross_entropy(
+        #     y.view(-1, self.n_vocab), dec_targets.view(-1), size_average=True
+        # )
+
         kl_loss = torch.mean(0.5 * torch.sum(torch.exp(logvar) + mu**2 - 1 - logvar, 1))
 
-        return recon_loss, kl_loss
+        return emb_loss, kl_loss, emb_loss
 
     def generate_sentences(self, mbsize):
         """
@@ -274,6 +302,7 @@ class RNN_VAE(nn.Module):
         z, c = z.view(1, 1, -1), c.view(1, 1, -1)
 
         h = torch.cat([z, c], dim=2)
+        # h = Variable(torch.zeros(self.num_layers, 1, self.h_dim)).cuda()
 
         if not isinstance(h, Variable):
             h = Variable(h)
@@ -283,18 +312,32 @@ class RNN_VAE(nn.Module):
         if raw:
             outputs.append(self.START_IDX)
 
+        emb = self.word_emb(word).view(1, 1, -1)
         for i in range(self.MAX_SENT_LEN):
-            emb = self.word_emb(word).view(1, 1, -1)
             emb = torch.cat([emb, z, c], 2)
 
             output, h = self.decoder(emb, h)
-            y = self.decoder_fc(output).view(-1)
-            y = F.softmax(y/temp, dim=0)
+            # y = self.decoder_fc(output).view(-1)
 
-            idx = torch.multinomial(y)
+            # New embed
+            output = output.squeeze(0)
+            # emb = self.emb_fc[0](output)
+            emb_out = [F.tanh(fc(output)) for fc in self.emb_fc]
+            coef_out = F.softmax(self.coef_fc(output), 1)
+            
+            emb = sum([single_expert * coef_out[:,k].unsqueeze(1) 
+                       for k, single_expert in enumerate(emb_out)])
 
-            word = Variable(torch.LongTensor([int(idx)]))
-            word = word.cuda() if self.gpu else word
+            # idx = torch.sum(F.mse_loss(emb, self.word_emb.weight, reduce=False), dim=1)
+            idx = F.cosine_similarity(emb.view(-1, self.emb_dim), self.word_emb.weight)
+            idx = torch.argmin(idx)
+            emb = emb.unsqueeze(0)
+
+
+            # y = F.softmax(y/temp, dim=0)
+            # idx = torch.multinomial(y, 1)
+            # word = Variable(torch.LongTensor([int(idx)]))
+            # word = word.cuda() if self.gpu else word
 
             idx = int(idx)
 
