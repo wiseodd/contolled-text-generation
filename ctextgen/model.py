@@ -27,6 +27,7 @@ class RNN_VAE(nn.Module):
         self.z_dim = z_dim
         self.c_dim = c_dim
         self.p_word_dropout = p_word_dropout
+        self.num_layers = 2
 
         self.gpu = gpu
 
@@ -56,7 +57,8 @@ class RNN_VAE(nn.Module):
         """
         Decoder is GRU with `z` and `c` appended at its inputs
         """
-        self.decoder = nn.GRU(self.emb_dim+z_dim+c_dim, z_dim+c_dim, dropout=0.3)
+        self.decoder = nn.GRU(self.emb_dim+z_dim+c_dim, z_dim+c_dim, 
+                              num_layers=self.num_layers, dropout=0.3)
         self.decoder_fc = nn.Linear(z_dim+c_dim, n_vocab)
         self.emb_fc = nn.Linear(z_dim+c_dim, self.emb_dim)
 
@@ -161,6 +163,7 @@ class RNN_VAE(nn.Module):
         init_h = torch.cat([z.unsqueeze(0), c.unsqueeze(0)], dim=2)
         inputs_emb = self.word_emb(dec_inputs)  # seq_len x mbsize x emb_dim
         inputs_emb = torch.cat([inputs_emb, init_h.repeat(seq_len, 1, 1)], 2)
+        init_h = init_h.repeat(self.num_layers, 1, 1)
 
         outputs, _ = self.decoder(inputs_emb, init_h)
         seq_len, mbsize, _ = outputs.size()
@@ -285,7 +288,7 @@ class RNN_VAE(nn.Module):
 
         z, c = z.view(1, 1, -1), c.view(1, 1, -1)
 
-        h = torch.cat([z, c], dim=2)
+        h = torch.cat([z, c], dim=2).repeat(self.num_layers, 1, 1,)
 
         if not isinstance(h, Variable):
             h = Variable(h)
