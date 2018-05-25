@@ -27,7 +27,7 @@ class RNN_VAE(nn.Module):
         self.z_dim = z_dim
         self.c_dim = c_dim
         self.p_word_dropout = p_word_dropout
-        self.num_layers = 5
+        self.num_layers = 2
 
         self.gpu = gpu
 
@@ -161,7 +161,7 @@ class RNN_VAE(nn.Module):
         mbsize = dec_inputs.size(1)
 
         # 1 x mbsize x (z_dim+c_dim)
-        init_h = torch.zeros(self.num_layers, mbsize, self.h_dim)
+        init_h = Variable(torch.zeros(self.num_layers, mbsize, self.h_dim)).cuda()
         init_zc = torch.cat([z.unsqueeze(0), c.unsqueeze(0)], dim=2)
         inputs_emb = self.word_emb(dec_inputs)  # seq_len x mbsize x emb_dim
         inputs_emb = torch.cat([inputs_emb, init_zc.repeat(seq_len, 1, 1)], 2)
@@ -248,9 +248,14 @@ class RNN_VAE(nn.Module):
         y, emb_out = self.forward_decoder(dec_inputs, z, c)
         emb_target = Variable(self.word_emb(dec_targets)).cuda()
 
-        emb_loss = F.mse_loss(
+        # emb_loss = F.mse_loss(
+        #     emb_out.view(-1, self.emb_dim), 
+        #     emb_target.view(-1, self.emb_dim), size_average=True
+        # )
+        emb_loss = F.cosine_embedding_loss(
             emb_out.view(-1, self.emb_dim), 
-            emb_target.view(-1, self.emb_dim), size_average=True
+            emb_target.view(-1, self.emb_dim), 
+            Variable(torch.ones(mbsize * seq_len)).cuda(), size_average=True
         )
         # recon_loss = F.cross_entropy(
         #     y.view(-1, self.n_vocab), dec_targets.view(-1), size_average=True
@@ -290,7 +295,8 @@ class RNN_VAE(nn.Module):
 
         z, c = z.view(1, 1, -1), c.view(1, 1, -1)
 
-        h = torch.cat([z, c], dim=2).repeat(self.num_layers, 1, 1,)
+        # h = torch.cat([z, c], dim=2)
+        h = Variable(torch.zeros(self.num_layers, 1, self.h_dim)).cuda()
 
         if not isinstance(h, Variable):
             h = Variable(h)
@@ -309,14 +315,13 @@ class RNN_VAE(nn.Module):
 
             # New embed
             emb = self.emb_fc(output).view(-1).unsqueeze(0)
-            idx = torch.sum(F.mse_loss(emb, self.word_emb.weight, reduce=False), dim=1)
+            # idx = torch.sum(F.mse_loss(emb, self.word_emb.weight, reduce=False), dim=1)
+            idx = F.cosine_similarity(emb.view(-1, self.emb_dim), self.word_emb.weight)
             idx = torch.argmin(idx)
             emb = emb.unsqueeze(0)
 
             # y = F.softmax(y/temp, dim=0)
-
             # idx = torch.multinomial(y, 1)
-
             # word = Variable(torch.LongTensor([int(idx)]))
             # word = word.cuda() if self.gpu else word
 

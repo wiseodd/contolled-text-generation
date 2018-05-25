@@ -29,7 +29,7 @@ args = parser.parse_args()
 
 mb_size = 32
 z_dim = 20
-h_dim = 64
+h_dim = 128
 lr = 1e-3
 lr_decay_every = 1000000
 n_iter = 100000
