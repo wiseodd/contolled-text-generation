@@ -257,6 +257,7 @@ class RNN_VAE(nn.Module):
             emb_target.view(-1, self.emb_dim), 
             Variable(torch.ones(mbsize * seq_len)).cuda(), size_average=True
         )
+        emb_loss *= 10
         # recon_loss = F.cross_entropy(
         #     y.view(-1, self.n_vocab), dec_targets.view(-1), size_average=True
         # )
