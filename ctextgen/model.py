@@ -27,7 +27,8 @@ class RNN_VAE(nn.Module):
         self.z_dim = z_dim
         self.c_dim = c_dim
         self.p_word_dropout = p_word_dropout
-        self.num_layers = 2
+        self.num_layers = 1
+        self.num_experts = 5
 
         self.gpu = gpu
 
@@ -57,10 +58,11 @@ class RNN_VAE(nn.Module):
         """
         Decoder is GRU with `z` and `c` appended at its inputs
         """
-        self.decoder = nn.GRU(self.emb_dim+z_dim+c_dim, self.h_dim, 
+        self.decoder = nn.GRU(self.emb_dim+z_dim+c_dim, z_dim+c_dim, 
                               num_layers=self.num_layers, dropout=0.3)
         # self.decoder_fc = nn.Linear(z_dim+c_dim, n_vocab)
-        self.emb_fc = nn.Linear(self.h_dim, self.emb_dim)
+        self.emb_fc = nn.ModuleList([nn.Linear(z_dim+c_dim, self.emb_dim)]*self.num_experts)
+        self.coef_fc = nn.Linear(z_dim+c_dim, self.num_experts)
 
         """
         Discriminator is CNN as in Kim, 2014
@@ -161,11 +163,10 @@ class RNN_VAE(nn.Module):
         mbsize = dec_inputs.size(1)
 
         # 1 x mbsize x (z_dim+c_dim)
-        init_h = Variable(torch.zeros(self.num_layers, mbsize, self.h_dim)).cuda()
-        init_zc = torch.cat([z.unsqueeze(0), c.unsqueeze(0)], dim=2)
+        # init_h = Variable(torch.zeros(self.num_layers, mbsize, self.h_dim)).cuda()
+        init_h = torch.cat([z.unsqueeze(0), c.unsqueeze(0)], dim=2)
         inputs_emb = self.word_emb(dec_inputs)  # seq_len x mbsize x emb_dim
-        inputs_emb = torch.cat([inputs_emb, init_zc.repeat(seq_len, 1, 1)], 2)
-
+        inputs_emb = torch.cat([inputs_emb, init_h.repeat(seq_len, 1, 1)], 2)
 
         outputs, _ = self.decoder(inputs_emb, init_h)
         seq_len, mbsize, _ = outputs.size()
@@ -175,10 +176,13 @@ class RNN_VAE(nn.Module):
         # y = y.view(seq_len, mbsize, self.n_vocab)
 
         # return outputs => word
-        emb_out = self.emb_fc(outputs)
-        emb_out = emb_out.view(seq_len, mbsize, self.emb_dim)
+        # mixture = self.emb_fc[0](outputs)
+        emb_out = [fc(outputs) for fc in self.emb_fc]
+        coef_out = F.softmax(self.coef_fc(outputs), 1)
+        mixture = sum([single_expert * coef_out[:,k].unsqueeze(1) 
+                       for k, single_expert in enumerate(emb_out)])
 
-        return _, emb_out
+        return _, mixture
 
     def forward_discriminator(self, inputs):
         """
@@ -257,7 +261,6 @@ class RNN_VAE(nn.Module):
             emb_target.view(-1, self.emb_dim), 
             Variable(torch.ones(mbsize * seq_len)).cuda(), size_average=True
         )
-        emb_loss *= 10
         # recon_loss = F.cross_entropy(
         #     y.view(-1, self.n_vocab), dec_targets.view(-1), size_average=True
         # )
@@ -296,8 +299,8 @@ class RNN_VAE(nn.Module):
 
         z, c = z.view(1, 1, -1), c.view(1, 1, -1)
 
-        # h = torch.cat([z, c], dim=2)
-        h = Variable(torch.zeros(self.num_layers, 1, self.h_dim)).cuda()
+        h = torch.cat([z, c], dim=2)
+        # h = Variable(torch.zeros(self.num_layers, 1, self.h_dim)).cuda()
 
         if not isinstance(h, Variable):
             h = Variable(h)
@@ -315,7 +318,7 @@ class RNN_VAE(nn.Module):
             # y = self.decoder_fc(output).view(-1)
 
             # New embed
-            emb = self.emb_fc(output).view(-1).unsqueeze(0)
+            emb = self.emb_fc[0](output).view(-1).unsqueeze(0)
             # idx = torch.sum(F.mse_loss(emb, self.word_emb.weight, reduce=False), dim=1)
             idx = F.cosine_similarity(emb.view(-1, self.emb_dim), self.word_emb.weight)
             idx = torch.argmin(idx)
