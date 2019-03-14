@@ -56,7 +56,9 @@ class RNN_VAE(nn.Module):
         """
         Decoder is GRU with `z` and `c` appended at its inputs
         """
-        self.decoder = nn.GRU(self.emb_dim+z_dim+c_dim, z_dim+c_dim, dropout=0.3)
+        self.decoder = nn.GRU(self.emb_dim+z_dim+c_dim, z_dim+c_dim)
+        self.decoder_drop=nn.Dropout(p=0.3)
+       
         self.decoder_fc = nn.Linear(z_dim+c_dim, n_vocab)
 
         """
@@ -161,6 +163,7 @@ class RNN_VAE(nn.Module):
         inputs_emb = torch.cat([inputs_emb, init_h.repeat(seq_len, 1, 1)], 2)
 
         outputs, _ = self.decoder(inputs_emb, init_h)
+        outputs = self.decoder_drop(outputs)
         seq_len, mbsize, _ = outputs.size()
 
         outputs = outputs.view(seq_len*mbsize, -1)
@@ -261,6 +264,7 @@ class RNN_VAE(nn.Module):
 
         return X_gen, c_gen
 
+
     def sample_sentence(self, z, c, raw=False, temp=1):
         """
         Sample single sentence from p(x|z,c) according to given temperature.
@@ -268,6 +272,7 @@ class RNN_VAE(nn.Module):
         to train discriminator. `False` means that this will return list of
         `word_idx` which is useful for evaluation.
         """
+        
         self.eval()
 
         word = torch.LongTensor([self.START_IDX])
@@ -291,10 +296,11 @@ class RNN_VAE(nn.Module):
             emb = torch.cat([emb, z, c], 2)
 
             output, h = self.decoder(emb, h)
+            output = self.decoder_drop(output)
             y = self.decoder_fc(output).view(-1)
             y = F.softmax(y/temp, dim=0)
 
-            idx = torch.multinomial(y)
+            idx = torch.multinomial(y,1)
 
             word = Variable(torch.LongTensor([int(idx)]))
             word = word.cuda() if self.gpu else word
@@ -328,7 +334,7 @@ class RNN_VAE(nn.Module):
             z = self.sample_z_prior(1)
             c = self.sample_c_prior(1)
 
-            samples.append(self.sample_soft_embed(z, c, temp=1))
+            samples.append(self.sample_soft_embed(z, c, temp=1,downDropoutBN=True))
             targets_z.append(z)
             targets_c.append(c)
 
@@ -338,13 +344,13 @@ class RNN_VAE(nn.Module):
 
         return X_gen, targets_z, targets_c
 
-    def sample_soft_embed(self, z, c, temp=1):
+    def sample_soft_embed(self, z, c, temp=1,downDropoutBN=False):
         """
         Sample single soft embedded sentence from p(x|z,c) and temperature.
         Soft embeddings are calculated as weighted average of word_emb
         according to p(x|z,c).
         """
-        self.eval()
+        self.decoder_drop.eval() if downDropoutBN else self.eval()
 
         z, c = z.view(1, 1, -1), c.view(1, 1, -1)
 
@@ -363,6 +369,7 @@ class RNN_VAE(nn.Module):
 
         for i in range(self.MAX_SENT_LEN):
             output, h = self.decoder(emb, h)
+            output = self.decoder_drop(output)
             o = self.decoder_fc(output).view(-1)
 
             # Sample softmax with temperature
